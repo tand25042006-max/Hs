@@ -1,0 +1,94 @@
+// Vẽ màn hình chào lúc vừa bật nguồn
+void drawSplashScreen() {
+  tft.fillScreen(COLOR_BACKGROUND);
+  tft.drawRoundRect(10, 10, 300, 220, 10, COLOR_PANEL);
+  
+  tft.setTextColor(COLOR_TEXT_MAIN);
+  tft.setTextSize(2);
+  tft.setCursor(75, 85);
+  tft.println("METEO STATION");
+  
+  tft.setTextColor(COLOR_TEXT_MUTED);
+  tft.setTextSize(1);
+  tft.setCursor(95, 130);
+  tft.println("System Initializing...");
+  
+  tft.drawRect(60, 160, 200, 12, COLOR_PANEL);
+  for(int i=0; i<196; i+=14) {
+    tft.fillRect(62 + i, 162, 12, 8, COLOR_SAFE);
+    delay(40);
+  }
+}
+
+// Vẽ khung cố định (Header và Footer) cho các trang dữ liệu
+void drawInterfaceStructure() {
+  tft.fillRect(0, 0, 320, 35, COLOR_PANEL);
+  tft.setTextColor(COLOR_TEXT_MAIN);
+  tft.setTextSize(1);
+  tft.setCursor(15, 13);
+  tft.println("MONITORING TRUCK");
+  
+  tft.setTextColor(COLOR_TEXT_MUTED);
+  tft.setCursor(250, 13);
+  tft.print("PAGE "); tft.print(currentPage); tft.println("/3");
+  
+  tft.fillRect(0, 210, 320, 30, COLOR_PANEL);
+}
+
+// Cập nhật số liệu cảm biến thay đổi liên tục theo từng trang
+void updateDisplayData() {
+  tft.setTextSize(1);
+  
+  if (currentPage == 1) {
+    // --- TRANG 1: MÔI TRƯỜNG ---
+    tft.fillRoundRect(15, 50, 135, 75, 6, COLOR_PANEL);
+    tft.setTextColor(COLOR_TEXT_MUTED); tft.setCursor(25, 58); tft.println("TEMPERATURE");
+    tft.setTextColor(COLOR_TEXT_MAIN);  tft.setTextSize(2);    tft.setCursor(25, 85);
+    if(tempC == -127.00) tft.println("N/A");
+    else { tft.print(tempC, 1); tft.setTextSize(1); tft.print(" C"); }
+
+    tft.fillRoundRect(170, 50, 135, 75, 6, COLOR_PANEL);
+    tft.setTextColor(COLOR_TEXT_MUTED); tft.setTextSize(1); tft.setCursor(180, 58); tft.println("LIGHT INTENSITY");
+    tft.setTextColor(COLOR_TEXT_MAIN);  tft.setTextSize(2); tft.setCursor(180, 85);
+    if(lux < 0) tft.println("N/A");
+    else { tft.print(lux, 0); tft.setTextSize(1); tft.print(" Lx"); }
+  } 
+  else if (currentPage == 2) {
+    // --- TRANG 2: TRẠNG THÁI NGHIÊNG ---
+    tft.fillRoundRect(15, 50, 290, 85, 6, COLOR_PANEL);
+    tft.setTextColor(COLOR_TEXT_MUTED); tft.setCursor(25, 58); tft.println("ACCELEROMETER MPU6050");
+    
+    tft.setTextColor(COLOR_TEXT_MAIN); tft.setTextSize(2);
+    tft.setCursor(25, 90);  tft.print("X:"); tft.print(accelX, 1);
+    tft.setCursor(125, 90); tft.print("Y:"); tft.print(accelY, 1);
+    tft.setCursor(225, 90); tft.print("Z:"); tft.print(accelZ, 1);
+  } 
+  else if (currentPage == 3) {
+    // --- TRANG 3: NĂNG LƯỢNG ACQUY ---
+    tft.fillRoundRect(15, 50, 290, 85, 6, COLOR_PANEL);
+    tft.setTextColor(COLOR_TEXT_MUTED); tft.setCursor(25, 58); tft.println("POWER MONITOR INA226");
+    
+    tft.setTextColor(COLOR_TEXT_MAIN); tft.setTextSize(2);
+    tft.setCursor(25, 90);  tft.print("V:");  tft.print(busVoltage, 2); 
+    tft.setCursor(115, 90); tft.print("mA:"); tft.print(currentmA, 0);
+    tft.setCursor(215, 90); tft.print("mW:"); tft.print(powermW, 0);
+  }
+
+  // --- THANH HIỂN THỊ CẢNH BÁO LỖI Ở FOOTER ---
+  tft.setTextSize(1);
+  if (systemErrors == ERROR_NONE) {
+    tft.fillRect(15, 215, 290, 20, COLOR_PANEL); 
+    tft.setTextColor(COLOR_SAFE);
+    tft.setCursor(15, 218);
+    tft.println("SYSTEM STATUS: EXCELLENT");
+  } 
+  else {
+    tft.fillRect(15, 215, 290, 20, COLOR_CRITICAL); 
+    tft.setTextColor(COLOR_TEXT_MAIN);
+    tft.setCursor(20, 218);
+    tft.print("ERR: ");
+    if (systemErrors & ERR_SENSOR_DISC)  tft.print("[DISCONNECTED] ");
+    if (systemErrors & ERR_OVER_TILT)    tft.print("[TILTED] ");
+    if (systemErrors & ERR_LOW_BATTERY)  tft.print("[LOW BATTERY] ");
+  }
+}
