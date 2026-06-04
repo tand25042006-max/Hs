@@ -1,0 +1,70 @@
+// Xử lý chuyển trang (ấn nhanh) hoặc reset nóng màn hình (giữ 3s)
+void handleButtonLogic() {
+  int buttonState = digitalRead(BUTTON_PIN);
+
+  if (buttonState == LOW) {
+    if (!isPressing) {
+      pressStartTime = millis();
+      isPressing = true;
+      resetTriggered = false;
+    }
+
+    if (millis() - pressStartTime > 3000 && !resetTriggered) {
+      tft.fillScreen(COLOR_CRITICAL);
+      tft.setTextColor(COLOR_TEXT_MAIN);
+      tft.setTextSize(2);
+      tft.setCursor(60, 110); 
+      tft.println("RESETTING TFT...");
+      delay(800);
+
+      tft.begin(); 
+      tft.setRotation(1);
+      tft.fillScreen(COLOR_BACKGROUND);
+      drawInterfaceStructure();
+      
+      resetTriggered = true;
+    }
+  } 
+  else {
+    if (isPressing) {
+      if (millis() - pressStartTime < 3000 && !resetTriggered) {
+        currentPage++;
+        if (currentPage > 3) currentPage = 1;
+        tft.fillScreen(COLOR_BACKGROUND);
+        drawInterfaceStructure();
+      }
+      isPressing = false;
+    }
+  }
+}
+
+// Thuật toán kiểm tra và phân loại phạm vi lỗi hệ thống
+void checkErrorScopes() {
+  systemErrors &= ERR_SENSOR_DISC; 
+
+  // Phạm vi 1: Kiểm tra lỏng dây/mất kết nối cảm biến đột ngột lúc chạy
+  if (tempC == -127.00 || lux < 0) {
+    systemErrors |= ERR_SENSOR_DISC;
+  }
+
+  // Phạm vi 2: Kiểm tra thiết bị bị nghiêng đổ quá mức an toàn
+  if (abs(accelX) > 4.5 || abs(accelY) > 4.5) {
+    systemErrors |= ERR_OVER_TILT;
+  }
+
+  // Phạm vi 3: Kiểm tra sụt áp nguồn Acquy dưới 11V
+  if (busVoltage < 11.0 && busVoltage > 1.0) {
+    systemErrors |= ERR_LOW_BATTERY;
+  }
+}
+
+// Điều khiển còi bíp cảnh báo ngắt quãng khi phát hiện lỗi bất kỳ
+void handleBuzzerAlarm() {
+  if (systemErrors != ERROR_NONE) {
+    digitalWrite(BUZZER_PIN, LOW); 
+    delay(60);
+    digitalWrite(BUZZER_PIN, HIGH);
+  } else {
+    digitalWrite(BUZZER_PIN, HIGH); 
+  }
+}
