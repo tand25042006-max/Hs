@@ -1,0 +1,324 @@
+#include <SPI.h>
+#include <Adafruit_GFX.h>         // Thư viện đồ họa cốt lõi Adafruit
+#include <Adafruit_ILI9341.h>     // Thư viện Driver ILI9341 Adafruit
+#include <Wire.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_VEML7700.h>
+#include <INA226_WE.h>            // Thư viện INA226_WE
+
+// ==========================================
+// ĐỊNH NGHĨA CHÂN NGOẠI VI (CHUẨN 100% KHÔNG TRÙNG)
+// ==========================================
+#define TFT_CS       5      // Chân CS màn hình
+#define TFT_DC       2      // Chân DC (RS) màn hình
+#define TFT_RST      4      // Chân RESET màn hình
+#define BUTTON_PIN   14     // Nút nhấn đa năng (Chuyển trang & Reset mềm)
+#define BUZZER_PIN   13     // Còi báo lỗi (Đấu trực tiếp Active-LOW)
+#define ONE_WIRE_BUS 15     // Chân dữ liệu cảm biến nhiệt DS18B20
+
+// Địa chỉ I2C mặc định của INA226
+#define I2C_ADDRESS_INA226 0x40
+
+// Khởi tạo màn hình ILI9341 (Chân SPI tự động nhận: MOSI=23, MISO=19, SCK=18)
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+
+// Khởi tạo các đối tượng cảm biến
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+Adafruit_MPU6050 mpu;
+Adafruit_VEML7700 veml;
+INA226_WE ina = INA226_WE(I2C_ADDRESS_INA226);
+
+// ==========================================
+// BẢNG MÃ MÀU GIAO DIỆN HỆ 16-BIT (HEX)
+// ==========================================
+#define COLOR_BACKGROUND 0x0841  // Xanh đen đậm nhã nhặn làm nền chính
+#define COLOR_PANEL      0x18C3  // Xanh xám nhạt làm nền bo góc hiển thị
+#define COLOR_TEXT_MAIN  0xFFFF  // Màu trắng cho chữ thông số chính
+#define COLOR_TEXT_MUTED 0xBDF7  // Xanh lục xám nhạt cho tiêu đề phụ
+#define COLOR_SAFE       0x4E69  // Xanh lá cây (Hệ thống an toàn)
+#define COLOR_CRITICAL   0xF800  // Đỏ rực (Hệ thống có lỗi/Nguy hiểm)
+
+// MANAGEMENT ERROR SCOPES (MÃ HÓA BIT PHẠM VI LỖI)
+enum ErrorScope {
+  ERROR_NONE       = 0x00,  // Không có lỗi
+  ERR_SENSOR_DISC  = 0x01,  // Phạm vi 1: Mất kết nối phần cứng cảm biến
+  ERR_OVER_TILT    = 0x02,  // Phạm vi 2: Trạm bị nghiêng đổ quá mức cho phép
+  ERR_LOW_BATTERY  = 0x04   // Phạm vi 3: Sụt áp Acquy dưới ngưỡng an toàn
+};
+uint8_t systemErrors = ERROR_NONE;
+
+// Các biến điều hướng hệ thống
+int currentPage = 1;
+unsigned long pressStartTime = 0;
+bool isPressing = false;
+bool resetTriggered = false;
+unsigned long lastUpdate = 0;
+
+// Biến lưu trữ dữ liệu cảm biến
+float tempC = 0.0;
+float lux = 0.0;
+float accelX = 0.0, accelY = 0.0, accelZ = 0.0;
+float busVoltage = 0.0, currentmA = 0.0, powermW = 0.0;
+
+// Khai báo trước các hàm đồ họa để tránh lỗi biên dịch
+void drawSplashScreen();
+void drawInterfaceStructure();
+void updateDisplayData();
+void readAllSensors();
+void checkErrorScopes();
+void handleBuzzerAlarm();
+void handleButtonLogic();
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Cấu hình chân nút bấm và còi báo
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, HIGH); // Mặc định tắt còi chủ động (Active-LOW)
+
+  // Khởi động màn hình màu
+  tft.begin();
+  tft.setRotation(1); // Xoay ngang màn hình (320x240)
+  drawSplashScreen();
+
+  // Khởi tạo Bus I2C cho nhóm cảm biến dùng chung đường dây
+  Wire.begin(21, 22);
+
+  // Khởi tạo cảm biến nhiệt độ
+  sensors.begin();
+  
+  // Khởi tạo và quét lỗi phần cứng ban đầu
+  if (!mpu.begin()) {
+    systemErrors |= ERR_SENSOR_DISC;
+    Serial.println("Lỗi: Không tìm thấy MPU6050");
+  }
+  
+  if (!veml.begin()) {
+    systemErrors |= ERR_SENSOR_DISC;
+    Serial.println("Lỗi: Không tìm thấy VEML7700");
+  }
+
+  // Khởi tạo INA226 bằng hàm chuẩn của thư viện INA226_WE
+  if (!ina.init()) {
+    systemErrors |= ERR_SENSOR_DISC;
+    Serial.println("Lỗi: Không tìm thấy INA226");
+  } else {
+    ina.waitUntilConversionCompleted(); 
+    ina.setResistorRange(0.1, 2.0); // Cấu hình trở Shunt 0.1 Ohm, dòng tối đa 2A
+  }
+
+  delay(1500); // Giữ màn hình khởi động trong 1.5s
+  tft.fillScreen(COLOR_BACKGROUND);
+  drawInterfaceStructure();
+}
+
+void loop() {
+  handleButtonLogic();
+  
+  // Cập nhật dữ liệu cảm biến và giao diện định kỳ mỗi 500ms
+  if (millis() - lastUpdate > 500) {
+    lastUpdate = millis();
+    readAllSensors();
+    checkErrorScopes();
+    updateDisplayData();
+    handleBuzzerAlarm();
+  }
+}
+
+// ==========================================
+// KHỐI LOGIC NÚT NHẤN ĐA NĂNG
+// ==========================================
+void handleButtonLogic() {
+  int buttonState = digitalRead(BUTTON_PIN);
+
+  if (buttonState == LOW) {
+    if (!isPressing) {
+      pressStartTime = millis();
+      isPressing = true;
+      resetTriggered = false;
+    }
+
+    // Ấn giữ liên tục quá 3 giây -> Kích hoạt RESET MỀM màn hình
+    if (millis() - pressStartTime > 3000 && !resetTriggered) {
+      tft.fillScreen(COLOR_CRITICAL);
+      tft.setTextColor(COLOR_TEXT_MAIN);
+      tft.setTextSize(2);
+      tft.setCursor(60, 110); 
+      tft.println("RESETTING TFT...");
+      delay(800);
+
+      tft.begin(); // Khởi tạo lại phần mềm
+      tft.setRotation(1);
+      tft.fillScreen(COLOR_BACKGROUND);
+      drawInterfaceStructure();
+      
+      resetTriggered = true;
+    }
+  } 
+  else {
+    if (isPressing) {
+      // Nếu thả tay ra trước 3 giây -> Thực hiện CHUYỂN TRANG thông số
+      if (millis() - pressStartTime < 3000 && !resetTriggered) {
+        currentPage++;
+        if (currentPage > 3) currentPage = 1;
+        tft.fillScreen(COLOR_BACKGROUND);
+        drawInterfaceStructure();
+      }
+      isPressing = false;
+    }
+  }
+}
+
+// ==========================================
+// KHỐI ĐỌC CẢM BIẾN VÀ QUẢN LÝ PHẠM VI LỖI
+// ==========================================
+void readAllSensors() {
+  // 1. Đọc nhiệt độ DS18B20
+  sensors.requestTemperatures();
+  tempC = sensors.getTempCByIndex(0);
+  
+  // 2. Đọc ánh sáng VEML7700
+  lux = veml.readLux();
+
+  // 3. Đọc góc nghiêng MPU6050
+  sensors_event_t a, g, temp;
+  if (mpu.getEvent(&a, &g, &temp)) {
+    accelX = a.acceleration.x;
+    accelY = a.acceleration.y;
+    accelZ = a.acceleration.z;
+  }
+
+  // 4. Đọc INA226 bằng hàm chuẩn xác 100% của thư viện INA226_WE
+  busVoltage = ina.getBusVoltage();               // Đọc điện áp Bus (V)
+  currentmA  = ina.getCurrent_mA();               // Đọc dòng điện (mA)
+  powermW    = ina.getBusPower_mW();              // Đọc công suất (mW)
+}
+
+void checkErrorScopes() {
+  systemErrors &= ERR_SENSOR_DISC; // Giữ lại trạng thái ngắt kết nối vật lý cố định nếu có từ lúc khởi động
+
+  // Phạm vi lỗi 1: Mất kết nối/Lỏng dây cảm biến đột ngột lúc đang chạy
+  if (tempC == -127.00 || lux < 0) {
+    systemErrors |= ERR_SENSOR_DISC;
+  }
+
+  // Phạm vi lỗi 2: Trạm quan trắc ngoài trời bị nghiêng đổ mạnh vượt ngưỡng an toàn
+  if (abs(accelX) > 4.5 || abs(accelY) > 4.5) {
+    systemErrors |= ERR_OVER_TILT;
+  }
+
+  // Phạm vi lỗi 3: Nguồn điện yếu hệ thống (Sụt áp Acquy xuống dưới 11.0V)
+  if (busVoltage < 11.0 && busVoltage > 1.0) {
+    systemErrors |= ERR_LOW_BATTERY;
+  }
+}
+
+void handleBuzzerAlarm() {
+  if (systemErrors != ERROR_NONE) {
+    // Có lỗi thuộc bất kỳ phạm vi nào -> Kéo chân xuống LOW làm còi bíp ngắn ngắt quãng cảnh báo
+    digitalWrite(BUZZER_PIN, LOW); 
+    delay(60);
+    digitalWrite(BUZZER_PIN, HIGH);
+  } else {
+    digitalWrite(BUZZER_PIN, HIGH); // Không có lỗi -> Tắt còi hoàn toàn
+  }
+}
+
+// ==========================================
+// KHỐI THIẾT KẾ ĐỒ HỌA MÀN HÌNH (ADAFRUIT_GFX)
+// ==========================================
+void drawSplashScreen() {
+  tft.fillScreen(COLOR_BACKGROUND);
+  tft.drawRoundRect(10, 10, 300, 220, 10, COLOR_PANEL);
+  
+  tft.setTextColor(COLOR_TEXT_MAIN);
+  tft.setTextSize(2);
+  tft.setCursor(75, 85);
+  tft.println("METEO STATION");
+  
+  tft.setTextColor(COLOR_TEXT_MUTED);
+  tft.setTextSize(1);
+  tft.setCursor(95, 130);
+  tft.println("System Initializing...");
+  
+  tft.drawRect(60, 160, 200, 12, COLOR_PANEL);
+  for(int i=0; i<196; i+=14) {
+    tft.fillRect(62 + i, 162, 12, 8, COLOR_SAFE);
+    delay(40);
+  }
+}
+
+void drawInterfaceStructure() {
+  tft.fillRect(0, 0, 320, 35, COLOR_PANEL);
+  tft.setTextColor(COLOR_TEXT_MAIN);
+  tft.setTextSize(1);
+  tft.setCursor(15, 13);
+  tft.println("MONITORING TRUCK");
+  
+  tft.setTextColor(COLOR_TEXT_MUTED);
+  tft.setCursor(250, 13);
+  tft.print("PAGE "); tft.print(currentPage); tft.println("/3");
+  
+  tft.fillRect(0, 210, 320, 30, COLOR_PANEL);
+}
+
+void updateDisplayData() {
+  tft.setTextSize(1);
+  
+  if (currentPage == 1) {
+    // --- TRANG 1: HIỂN THỊ MÔI TRƯỜNG ---
+    tft.fillRoundRect(15, 50, 135, 75, 6, COLOR_PANEL);
+    tft.setTextColor(COLOR_TEXT_MUTED); tft.setCursor(25, 58); tft.println("TEMPERATURE");
+    tft.setTextColor(COLOR_TEXT_MAIN);  tft.setTextSize(2);    tft.setCursor(25, 85);
+    if(tempC == -127.00) tft.println("N/A");
+    else { tft.print(tempC, 1); tft.setTextSize(1); tft.print(" C"); }
+
+    tft.fillRoundRect(170, 50, 135, 75, 6, COLOR_PANEL);
+    tft.setTextColor(COLOR_TEXT_MUTED); tft.setTextSize(1); tft.setCursor(180, 58); tft.println("LIGHT INTENSITY");
+    tft.setTextColor(COLOR_TEXT_MAIN);  tft.setTextSize(2); tft.setCursor(180, 85);
+    if(lux < 0) tft.println("N/A");
+    else { tft.print(lux, 0); tft.setTextSize(1); tft.print(" Lx"); }
+  } 
+  else if (currentPage == 2) {
+    // --- TRANG 2: TRẠNG THÁI GÓC NGHIÊNG ---
+    tft.fillRoundRect(15, 50, 290, 85, 6, COLOR_PANEL);
+    tft.setTextColor(COLOR_TEXT_MUTED); tft.setCursor(25, 58); tft.println("ACCELEROMETER MPU6050");
+    
+    tft.setTextColor(COLOR_TEXT_MAIN); tft.setTextSize(2);
+    tft.setCursor(25, 90);  tft.print("X:"); tft.print(accelX, 1);
+    tft.setCursor(125, 90); tft.print("Y:"); tft.print(accelY, 1);
+    tft.setCursor(225, 90); tft.print("Z:"); tft.print(accelZ, 1);
+  } 
+  else if (currentPage == 3) {
+    // --- TRANG 3: NĂNG LƯỢNG ACQUY ---
+    tft.fillRoundRect(15, 50, 290, 85, 6, COLOR_PANEL);
+    tft.setTextColor(COLOR_TEXT_MUTED); tft.setCursor(25, 58); tft.println("POWER MONITOR INA226");
+    
+    tft.setTextColor(COLOR_TEXT_MAIN); tft.setTextSize(2);
+    tft.setCursor(25, 90);  tft.print("V:");  tft.print(busVoltage, 2); 
+    tft.setCursor(115, 90); tft.print("mA:"); tft.print(currentmA, 0);
+    tft.setCursor(215, 90); tft.print("mW:"); tft.print(powermW, 0);
+  }
+
+  // --- XỬ LÝ VÙNG CẢNH BÁO LỖI THEO PHẠM VI TẠI FOOTER ---
+  tft.setTextSize(1);
+  if (systemErrors == ERROR_NONE) {
+    tft.fillRect(15, 215, 290, 20, COLOR_PANEL); 
+    tft.setTextColor(COLOR_SAFE);
+    tft.setCursor(15, 218);
+    tft.println("SYSTEM STATUS: EXCELLENT");
+  } 
+  else {
+    tft.fillRect(15, 215, 290, 20, COLOR_CRITICAL); 
+    tft.setTextColor(COLOR_TEXT_MAIN);
+    tft.setCursor(20, 218);
+    tft.print("ERR: ");
+    if (systemErrors & ERR_SENSOR_DISC)  tft.print("[DISCONNECTED] ");
+    if (systemErrors & ERR_OVER_TILT)    tft.print("[TILTED] ");
+    if (systemErrors & ERR_LOW_BATTERY)  tft.print("[LOW BATTERY] ");
+  }
+}
