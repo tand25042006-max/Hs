@@ -1,0 +1,43 @@
+// Hàm khởi tạo và quét lỗi phần cứng ban đầu
+void initAllSensors() {
+  if (!mpu.begin()) {
+    systemErrors |= ERR_SENSOR_DISC;
+    Serial.println("Lỗi: Không tìm thấy MPU6050");
+  }
+  
+  if (!veml.begin()) {
+    systemErrors |= ERR_SENSOR_DISC;
+    Serial.println("Lỗi: Không tìm thấy VEML7700");
+  }
+
+  if (!ina.init()) {
+    systemErrors |= ERR_SENSOR_DISC;
+    Serial.println("Lỗi: Không tìm thấy INA226");
+  } else {
+    ina.waitUntilConversionCompleted(); 
+    ina.setResistorRange(0.1, 2.0); 
+  }
+}
+
+// Hàm cập nhật dữ liệu liên tục từ các cảm biến
+void readAllSensors() {
+  // 1. Đọc nhiệt độ DS18B20
+  sensors.requestTemperatures();
+  tempC = sensors.getTempCByIndex(0);
+  
+  // 2. Đọc ánh sáng VEML7700
+  lux = veml.readLux();
+
+  // 3. Đọc góc nghiêng MPU6050
+  sensors_event_t a, g, temp;
+  if (mpu.getEvent(&a, &g, &temp)) {
+    accelX = a.acceleration.x;
+    accelY = a.acceleration.y;
+    accelZ = a.acceleration.z;
+  }
+
+  // 4. Đọc INA226 theo đúng phiên bản chạy ổn định trên máy của bạn
+  busVoltage = ina.getBusVoltage_V();             
+  currentmA  = ina.getCurrent_mA();               
+  powermW    = ina.getBusPower() * 1000.0; // Nhân 1000 đổi từ Watt sang mW
+}
